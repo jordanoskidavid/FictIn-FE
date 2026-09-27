@@ -21,13 +21,14 @@ export default defineConfig((env) =>
           "src/lib/types.ts",
         ],
         reporter: ["text", "html", "lcov"],
-        // Baseline measured 2026-09-27: 60.4 stmts / 53.9 branches / 63.3 funcs / 60.7 lines.
+        // Baseline measured 2026-09-27 (after covering all pages):
+        // 96.8 stmts / 87.8 branches / 95.5 funcs / 98.2 lines. Thresholds sit ~5 points below.
         // Raise these as coverage grows — never lower them to make CI pass.
         thresholds: {
-          statements: 55,
-          branches: 50,
-          functions: 55,
-          lines: 55,
+          statements: 92,
+          branches: 83,
+          functions: 90,
+          lines: 93,
         },
       },
     },
