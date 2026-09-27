@@ -1,7 +1,9 @@
 import type {
   AttendanceRow,
-  ClassSession,
+  ClassSchedule,
+  EnrolledStudent,
   LoginResponse,
+  SessionView,
   Subject,
   TokenMessage,
   User,
@@ -46,13 +48,47 @@ export function buildSubject(overrides: Partial<Subject> = {}): Subject {
   };
 }
 
-export function buildSession(overrides: Partial<ClassSession> = {}): ClassSession {
+/** A session as returned by GET /sessions/:id (SessionView). Live by default. */
+export function buildSession(overrides: Partial<SessionView> = {}): SessionView {
+  const status = overrides.status ?? "live";
   return {
     id: nextId("session"),
     subject_id: "subject-1",
-    status: "live",
+    status,
     started_at: TIMESTAMP,
+    ended_at: status === "ended" ? "2026-09-13T11:00:00Z" : undefined,
     created_at: TIMESTAMP,
+    qr_rotating: status === "live",
+    ...overrides,
+  };
+}
+
+export function buildSchedule(overrides: Partial<ClassSchedule> = {}): ClassSchedule {
+  return {
+    id: nextId("schedule"),
+    subject_id: "subject-1",
+    day_of_week: 1,
+    start_time: "10:00:00",
+    end_time: "11:30:00",
+    room: "A-101",
+    created_at: TIMESTAMP,
+    ...overrides,
+  };
+}
+
+/** A roster entry. `subject_id` is test-only bookkeeping so handlers can filter by subject. */
+export function buildEnrollment(
+  overrides: Partial<EnrolledStudent> & { subject_id?: string } = {},
+): EnrolledStudent & { subject_id: string } {
+  const studentId = overrides.student_id ?? nextId("student");
+  return {
+    enrollment_id: nextId("enrollment"),
+    subject_id: "subject-1",
+    student_id: studentId,
+    full_name: `Student ${studentId}`,
+    email: `${studentId}@example.com`,
+    student_code: `S${seq.toString().padStart(4, "0")}`,
+    enrolled_at: TIMESTAMP,
     ...overrides,
   };
 }
