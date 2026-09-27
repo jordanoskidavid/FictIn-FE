@@ -52,11 +52,18 @@ function toRoster(entry: (typeof db.enrollments)[number]): EnrolledStudent {
   return copy as EnrolledStudent;
 }
 
+/** Quotes a field the way Go's encoding/csv does (commas, quotes, newlines). */
+function csvField(value: string) {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
 /** Same columns and headers as the backend's writeAttendanceCSV. */
 function attendanceCsv(rows: AttendanceRow[]) {
   const header = "record_id,session_id,subject_code,subject_name,student_code,student_name,scanned_at";
   const lines = rows.map((r) =>
-    [r.id, r.session_id, r.subject_code, r.subject_name, r.student_code ?? "", r.student_name, r.scanned_at].join(","),
+    [r.id, r.session_id, r.subject_code, r.subject_name, r.student_code ?? "", r.student_name, r.scanned_at]
+      .map(csvField)
+      .join(","),
   );
   return new HttpResponse([header, ...lines].join("\n") + "\n", {
     headers: {
@@ -64,6 +71,13 @@ function attendanceCsv(rows: AttendanceRow[]) {
       "Content-Disposition": 'attachment; filename="attendance.csv"',
     },
   });
+}
+
+/** Start/stop return a plain ClassSession: no `qr_rotating` (that's only on GET /sessions/:id). */
+function toClassSession(session: SessionView) {
+  const copy: Partial<SessionView> = { ...session };
+  delete copy.qr_rotating;
+  return copy;
 }
 
 /** Success envelope used by the backend: `{ data: ... }`. */
@@ -108,10 +122,13 @@ export const handlers = [
 
   http.post("/api/v1/auth/logout", () => new HttpResponse(null, { status: 204 })),
 
-  // Mirrors AuthService.ChangePassword: 200 { status }, 401 for a wrong current
-  // password, 422 when the new password equals the current one.
+  // Mirrors AuthHandler/AuthService.ChangePassword: 422 if new_password is shorter than 8
+  // (request validation), 401 for a wrong current password, 422 if unchanged, else 200.
   http.post("/api/v1/auth/change-password", async ({ request }) => {
     const body = (await request.json()) as { current_password: string; new_password: string };
+    if (!body.current_password || (body.new_password ?? "").length < 8) {
+      return apiError(422, "VALIDATION_ERROR", "request validation failed");
+    }
     if (body.current_password !== TEST_PASSWORD) {
       return apiError(401, "INVALID_CREDENTIALS", "invalid email or password");
     }
@@ -207,6 +224,15 @@ export const handlers = [
 
   http.post("/api/v1/subjects/:id/schedules", async ({ params, request }) => {
     const body = (await request.json()) as Partial<ClassSchedule>;
+    const day = body.day_of_week ?? -1;
+    const time = /^\d{2}:\d{2}(:\d{2})?$/;
+    if (day < 0 || day > 6) return apiError(422, "VALIDATION_ERROR", "day_of_week must be 0..6");
+    if (!time.test(body.start_time ?? "") || !time.test(body.end_time ?? "")) {
+      return apiError(422, "VALIDATION_ERROR", "start_time and end_time must be HH:MM or HH:MM:SS");
+    }
+    if (body.end_time! <= body.start_time!) {
+      return apiError(422, "VALIDATION_ERROR", "end_time must be after start_time");
+    }
     const schedule = buildSchedule({ ...body, room: body.room, subject_id: String(params.id) });
     db.schedules.push(schedule);
     return ok(schedule, { status: 201 });
@@ -214,11 +240,18 @@ export const handlers = [
 
   http.post("/api/v1/subjects/:id/enrollments", async ({ params, request }) => {
     const body = (await request.json()) as { student_id?: string; student_code?: string };
+    if (!body.student_id && !body.student_code) {
+      return apiError(422, "VALIDATION_ERROR", "provide student_id or student_code");
+    }
+    if (body.student_id && !UUID_RE.test(body.student_id)) {
+      return apiError(400, "BAD_REQUEST", "student_id must be a valid UUID");
+    }
     const student = db.users.find((u) =>
       body.student_id ? u.id === body.student_id : u.student_code === body.student_code,
     );
     if (!student) return apiError(404, "NOT_FOUND", "student not found");
     if (student.role !== "student") return apiError(422, "VALIDATION_ERROR", "target user is not a student");
+    if (!student.is_active) return apiError(422, "VALIDATION_ERROR", "student account is inactive");
     if (db.enrollments.some((e) => e.subject_id === params.id && e.student_id === student.id)) {
       return apiError(409, "CONFLICT", "student already enrolled");
     }
@@ -243,22 +276,30 @@ export const handlers = [
   // ---- sessions (":id" is a subject id for start, a session id otherwise) ----
   http.post("/api/v1/sessions/:subjectId/start", async ({ params, request }) => {
     const body = (await request.json().catch(() => ({}))) as { schedule_id?: string };
+    if (body.schedule_id) {
+      if (!UUID_RE.test(body.schedule_id)) {
+        return apiError(400, "BAD_REQUEST", "schedule_id must be a valid UUID");
+      }
+      const schedule = db.schedules.find((s) => s.id === body.schedule_id);
+      if (!schedule) return apiError(422, "VALIDATION_ERROR", "schedule_id not found");
+      if (schedule.subject_id !== params.subjectId) {
+        return apiError(422, "VALIDATION_ERROR", "schedule_id does not belong to this subject");
+      }
+    }
     if (db.sessions.some((s) => s.subject_id === params.subjectId && s.status === "live")) {
       return apiError(409, "CONFLICT", "a live session already exists for this subject");
     }
     const session = buildSession({ subject_id: String(params.subjectId), schedule_id: body.schedule_id });
     db.sessions.push(session);
-    // Start returns a plain ClassSession (no qr_rotating), like the backend.
-    const classSession: Partial<SessionView> = { ...session };
-    delete classSession.qr_rotating;
-    return ok(classSession, { status: 201 });
+    return ok(toClassSession(session), { status: 201 });
   }),
 
   http.post("/api/v1/sessions/:id/stop", ({ params }) => {
     const session = db.sessions.find((s) => s.id === params.id);
-    if (!session) return apiError(404, "NOT_FOUND");
+    if (!session) return apiError(404, "NOT_FOUND", "resource not found");
+    if (session.status !== "live") return apiError(409, "CONFLICT", "session is not live");
     Object.assign(session, { status: "ended", ended_at: "2026-09-13T11:00:00Z", qr_rotating: false });
-    return ok(session);
+    return ok(toClassSession(session));
   }),
 
   http.get("/api/v1/sessions/:id", ({ params }) => {

@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 
 export interface CapturedDownload {
   filename: string;
@@ -6,7 +6,7 @@ export interface CapturedDownload {
 }
 
 /**
- * jsdom can't download files. This captures browser-level downloads (blob URL + <a download>
+ * jsdom can't download files (it doesn't navigate to blob URLs). This captures browser-level downloads (blob URL + <a download>
  * click) so tests can assert the filename and contents the user would receive.
  * Spies are restored automatically after each test (restoreMocks in vitest.config.ts).
  *
@@ -21,26 +21,37 @@ export function mockDownloads() {
   const blobs = new Map<string, Blob>();
   const revoked: string[] = [];
 
-  // jsdom doesn't implement these, so define them before spying.
-  for (const name of ["createObjectURL", "revokeObjectURL"] as const) {
-    if (!(name in URL)) {
-      Object.defineProperty(URL, name, { value: () => undefined, configurable: true, writable: true });
-    }
+  // jsdom 30 implements these; older jsdom doesn't. If missing, shim them for this test only.
+  const shimmed = (["createObjectURL", "revokeObjectURL"] as const).filter((name) => !(name in URL));
+  for (const name of shimmed) {
+    Object.defineProperty(URL, name, { value: () => undefined, configurable: true, writable: true });
   }
+  const realClick = HTMLAnchorElement.prototype.click;
 
-  vi.spyOn(URL, "createObjectURL").mockImplementation((obj) => {
+  const createSpy = vi.spyOn(URL, "createObjectURL").mockImplementation((obj) => {
     const url = `blob:test/${blobs.size + 1}`;
     blobs.set(url, obj as Blob);
     return url;
   });
-  vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => {
+  const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => {
     revoked.push(url);
   });
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
     this: HTMLAnchorElement,
   ) {
     const blob = blobs.get(this.href);
-    if (blob && this.download) downloads.push({ filename: this.download, blob });
+    if (blob && this.download) {
+      downloads.push({ filename: this.download, blob });
+    } else {
+      realClick.call(this); // not one of our downloads: behave normally
+    }
+  });
+
+  onTestFinished(() => {
+    // Restore our spies first (restoring later would re-install the shims), then drop the shims.
+    createSpy.mockRestore();
+    revokeSpy.mockRestore();
+    for (const name of shimmed) delete (URL as unknown as Record<string, unknown>)[name];
   });
 
   return Object.assign(downloads, {

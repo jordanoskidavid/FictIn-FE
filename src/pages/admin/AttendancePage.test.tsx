@@ -50,14 +50,17 @@ function captureQueries() {
 }
 
 describe("Admin › Attendance", () => {
-  it("prompts for a search and loads nothing up front", () => {
+  it("prompts for a search and loads nothing up front", async () => {
     const queries = captureQueries();
-
-    renderPage();
+    const { user } = renderPage();
 
     expect(screen.getByText("No results yet")).toBeInTheDocument();
     expect(screen.getByText("Run a search to see attendance records.")).toBeInTheDocument();
-    expect(queries).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    await screen.findByText("No matching records");
+    expect(queries).toHaveLength(1); // only the search — nothing was fetched on mount
   });
 
   describe("searching", () => {

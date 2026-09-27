@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { http, ws } from "msw";
 import { QRCodeSVG } from "qrcode.react";
 import { Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BoardPage } from "./BoardPage";
 import { renderWithProviders } from "../../test/renderWithProviders";
 import { RouteStub } from "../../test/RouteStub";
@@ -39,6 +39,20 @@ function streamTokens(...tokens: TokenMessage[]) {
   );
 }
 
+/**
+ * The board learns its subject from GET /sessions/:id, separately from the socket.
+ * Tests that depend on where "End session" navigates must wait for that response.
+ */
+function trackSessionLookup() {
+  let answered = false;
+  server.events.on("response:mocked", ({ request }) => {
+    if (request.method === "GET" && new URL(request.url).pathname === `/api/v1/sessions/${SESSION_ID}`) {
+      answered = true;
+    }
+  });
+  return () => vi.waitFor(() => expect(answered).toBe(true));
+}
+
 function renderBoard() {
   return renderWithProviders(
     <Routes>
@@ -54,6 +68,10 @@ describe("Professor › QR board", () => {
   beforeEach(() => {
     db.sessions = [buildSession({ id: SESSION_ID, subject_id: SUBJECT_ID, status: "live" })];
     setStoredSessionId(SUBJECT_ID, SESSION_ID);
+  });
+
+  afterEach(() => {
+    server.events.removeAllListeners();
   });
 
   it("waits for the first token while connecting", () => {
@@ -102,8 +120,10 @@ describe("Professor › QR board", () => {
 
   it("ends the session, forgets it and returns to the subject", async () => {
     streamTokens(buildTokenMessage({ session_id: SESSION_ID }));
+    const sessionLookup = trackSessionLookup();
     const { user } = renderBoard();
     await screen.findByRole("img", { name: "Attendance QR code" });
+    await sessionLookup();
 
     await user.click(screen.getByRole("button", { name: "End session" }));
 
@@ -117,7 +137,9 @@ describe("Professor › QR board", () => {
   it("falls back to the subjects list when the session's subject is unknown", async () => {
     streamTokens();
     server.use(http.get("/api/v1/sessions/:id", () => apiError(404, "NOT_FOUND")));
+    const sessionLookup = trackSessionLookup();
     const { user } = renderBoard();
+    await sessionLookup();
 
     await user.click(screen.getByRole("button", { name: "End session" }));
 

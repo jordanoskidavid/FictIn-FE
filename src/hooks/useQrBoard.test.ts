@@ -201,5 +201,26 @@ describe("useQrBoard", () => {
       expect(polls).toBe(1);
       expect(NeverOpeningSocket.instances).toHaveLength(1);
     });
+
+    it("closes the pending socket and never polls when unmounted before the timeout", async () => {
+      vi.useFakeTimers();
+      NeverOpeningSocket.instances = [];
+      vi.stubGlobal("WebSocket", NeverOpeningSocket);
+      let polls = 0;
+      server.use(
+        http.get("/api/v1/sessions/:sessionId/qr/current", () => {
+          polls++;
+          return ok(buildTokenMessage());
+        }),
+      );
+      const { unmount } = renderHook(() => useQrBoard("s1"));
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+
+      unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(NeverOpeningSocket.instances[0].closeCalls).toBe(1);
+      expect(polls).toBe(0);
+    });
   });
 });

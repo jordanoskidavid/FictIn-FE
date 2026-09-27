@@ -82,7 +82,7 @@ describe("Professor › Subject detail", () => {
     it("starts the session for the chosen schedule slot", async () => {
       db.schedules = [
         buildSchedule({
-          id: "sched-1",
+          id: "5c3d9a1e-2b4f-4c6d-8e7f-90a1b2c3d4e5",
           subject_id: SUBJECT_ID,
           day_of_week: 3,
           start_time: "09:00:00",
@@ -105,7 +105,7 @@ describe("Professor › Subject detail", () => {
       await user.click(screen.getByRole("button", { name: "Start session" }));
 
       await screen.findByRole("heading", { name: /^Board at / });
-      expect(body).toEqual({ schedule_id: "sched-1" });
+      expect(body).toEqual({ schedule_id: "5c3d9a1e-2b4f-4c6d-8e7f-90a1b2c3d4e5" });
     });
 
     it("explains when a live session already exists", async () => {
@@ -149,7 +149,6 @@ describe("Professor › Subject detail", () => {
 
       await renderLoaded();
 
-      expect(screen.getByRole("button", { name: "Start session" })).toBeInTheDocument();
       await vi.waitFor(() => expect(getStoredSessionId(SUBJECT_ID)).toBeNull());
     });
 
@@ -178,6 +177,21 @@ describe("Professor › Subject detail", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our end.");
       expect(screen.getByRole("button", { name: "Stop session" })).toBeInTheDocument();
       expect(getStoredSessionId(SUBJECT_ID)).toBe(live.id);
+    });
+
+    it("explains when the session was already ended elsewhere", async () => {
+      const live = buildSession({ subject_id: SUBJECT_ID, status: "live" });
+      db.sessions = [live];
+      setStoredSessionId(SUBJECT_ID, live.id);
+      const { user } = renderDetail();
+      const stop = await screen.findByRole("button", { name: "Stop session" });
+      live.status = "ended"; // e.g. stopped from the board in another tab
+
+      await user.click(stop);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "That conflicts with existing data.",
+      );
     });
   });
 
@@ -323,6 +337,41 @@ describe("Professor › Subject detail", () => {
       expect(screen.getByText("No students enrolled yet")).toBeInTheDocument();
     });
 
+    it.each([
+      ["isn't a student", { role: "professor" as const }],
+      ["is deactivated", { role: "student" as const, is_active: false }],
+    ])("rejects a user who %s", async (_, overrides) => {
+      db.users = [buildUser({ ...overrides, full_name: "Not Eligible", student_code: "S7777" })];
+      const { user } = await renderLoaded();
+
+      await user.type(screen.getByLabelText(/^Enroll student/), "S7777");
+      await user.click(screen.getByRole("button", { name: "Enroll" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Please check the form and try again.",
+      );
+      expect(screen.getByText("No students enrolled yet")).toBeInTheDocument();
+    });
+
+    it("requires an ID or code before enrolling", async () => {
+      let called = false;
+      server.use(
+        http.post("/api/v1/subjects/:id/enrollments", () => {
+          called = true;
+          return undefined;
+        }),
+      );
+      const { user } = await renderLoaded();
+
+      await user.click(screen.getByRole("button", { name: "Enroll" }));
+
+      expect(screen.getByLabelText(/^Enroll student/)).toBeInvalid();
+      // Prove the page is idle: another action completes, and still no enroll request was sent.
+      await user.click(screen.getByRole("button", { name: "Add slot" }));
+      await screen.findByRole("row", { name: /Monday/ });
+      expect(called).toBe(false);
+    });
+
     it("explains when the student is already enrolled", async () => {
       const student = buildUser({ role: "student", full_name: "Mila Novak", student_code: "S2026" });
       db.users = [student];
@@ -359,12 +408,23 @@ describe("Professor › Subject detail", () => {
 
     it("does nothing when the confirmation is cancelled", async () => {
       vi.spyOn(window, "confirm").mockReturnValue(false);
+      let deleteRequested = false;
+      server.use(
+        http.delete("/api/v1/subjects/:id", () => {
+          deleteRequested = true;
+          return undefined;
+        }),
+      );
       const { user } = await renderLoaded();
 
       await user.click(screen.getByRole("button", { name: "Delete subject" }));
+      // Let any in-flight work settle: a later action round-trips before we assert.
+      await user.click(screen.getByRole("button", { name: "Add slot" }));
+      await screen.findByRole("row", { name: /Monday/ });
 
+      expect(window.confirm).toHaveBeenCalledOnce();
+      expect(deleteRequested).toBe(false);
       expect(screen.getByRole("heading", { name: "Algorithms" })).toBeInTheDocument();
-      expect(db.subjects).toHaveLength(1);
     });
 
     it("stays on the page and shows the error when deletion fails", async () => {

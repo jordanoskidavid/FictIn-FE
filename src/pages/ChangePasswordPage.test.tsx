@@ -56,7 +56,9 @@ describe("Change password flow", () => {
   });
 
   // The backend answers a wrong current password with 401 INVALID_CREDENTIALS.
-  // The user must stay signed in (no logout on this 401) and see an error.
+  // The user must stay signed in and see an error. Known issue (CONTRIBUTING.md › Known
+  // follow-ups): api.ts treats this 401 as an expired token (refresh + re-POST) and the copy
+  // mentions "email". This pins today's text so a copy fix updates the test deliberately.
   it("rejects a wrong current password without signing the user out", async () => {
     const { user } = renderChangePassword();
 
@@ -65,7 +67,7 @@ describe("Change password flow", () => {
     await user.type(screen.getByLabelText("Confirm new password"), "brand-new-pass");
     await user.click(screen.getByRole("button", { name: "Update password" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/password/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Incorrect email or password.");
     expect(screen.getByRole("heading", { name: "Set a new password" })).toBeInTheDocument();
     expect(getAccessToken()).not.toBeNull();
   });

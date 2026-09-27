@@ -231,6 +231,24 @@ describe("downloadCsv", () => {
     expect(seen).toEqual({ search: "?subject_id=s1&format=csv", auth: "Bearer access-abc" });
   });
 
+  it("refreshes an expired token once and retries the download", async () => {
+    const downloads = mockDownloads();
+    db.users.push(buildUser({ id: "u1" }));
+    setTokens("stale-access", "refresh-u1");
+    server.use(
+      http.get("/api/v1/export", ({ request }) =>
+        request.headers.get("Authorization") === "Bearer access-u1"
+          ? csvResponse("fresh")
+          : apiError(401, "UNAUTHORIZED"),
+      ),
+    );
+
+    await downloadCsv("/api/v1/export", {});
+
+    expect(await downloads[0].blob.text()).toBe("fresh");
+    expect(getAccessToken()).toBe("access-u1");
+  });
+
   it("throws the API error from a JSON error body and downloads nothing", async () => {
     const downloads = mockDownloads();
     server.use(http.get("/api/v1/export", () => apiError(403, "FORBIDDEN", "admins only")));

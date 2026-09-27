@@ -82,6 +82,30 @@ describe("Professor › Session detail", () => {
         .toBeInTheDocument();
     });
 
+    it("shows an error when the attendance list can't be loaded", async () => {
+      server.use(
+        http.get("/api/v1/sessions/:id/attendance", () => apiError(403, "FORBIDDEN")),
+      );
+
+      renderSession();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "You don't have permission to do that.",
+      );
+    });
+
+    it("keeps the list and shows the error when a refresh fails", async () => {
+      db.attendance = [buildAttendanceRow({ session_id: SESSION_ID, student_name: "Ana Student" })];
+      const { user } = renderSession();
+      await screen.findByRole("cell", { name: "Ana Student" });
+      server.use(http.get("/api/v1/sessions/:id/attendance", () => apiError(500, "INTERNAL")));
+
+      await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our end.");
+      expect(screen.getByRole("cell", { name: "Ana Student" })).toBeInTheDocument();
+    });
+
     it("shows an empty state before anyone scans in", async () => {
       renderSession();
 
@@ -133,6 +157,18 @@ describe("Professor › Session detail", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our end.");
       expect(screen.getByRole("button", { name: "Stop session" })).toBeInTheDocument();
       expect(getStoredSessionId(SUBJECT_ID)).toBe(SESSION_ID);
+    });
+
+    it("explains when the session was already ended elsewhere", async () => {
+      const { user } = renderSession();
+      const stop = await screen.findByRole("button", { name: "Stop session" });
+      db.sessions[0].status = "ended"; // e.g. stopped from the board
+
+      await user.click(stop);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "That conflicts with existing data.",
+      );
     });
 
     it("hides the controls for a session that has already ended", async () => {
