@@ -63,7 +63,7 @@ export const handlers = [
 
   http.post("/api/v1/auth/logout", () => new HttpResponse(null, { status: 204 })),
 
-  http.post("/api/v1/auth/change-password", () => new HttpResponse(null, { status: 204 })),
+  http.post("/api/v1/auth/change-password", () => ok({ status: "password_changed" })),
 
   http.post("/api/v1/auth/register", async ({ request }) => {
     const body = (await request.json()) as Partial<User>;

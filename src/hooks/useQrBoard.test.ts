@@ -1,0 +1,140 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { http, ws } from "msw";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useQrBoard } from "./useQrBoard";
+import { server } from "../test/server";
+import { apiError, ok } from "../test/handlers";
+import { buildTokenMessage } from "../test/factories";
+import { setTokens } from "../lib/tokenStore";
+
+// MSW intercepts the WebSocket the hook opens — no real socket is created.
+const qrSocket = ws.link(`ws://${window.location.host}/ws/sessions/:sessionId/qr`);
+
+describe("useQrBoard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("authenticates the socket with the access token query param", async () => {
+    setTokens("access-prof", "refresh-prof");
+    const connectedUrl = vi.fn();
+    server.use(qrSocket.addEventListener("connection", ({ client }) => connectedUrl(client.url.href)));
+
+    renderHook(() => useQrBoard("s1"));
+
+    await waitFor(() => expect(connectedUrl).toHaveBeenCalled());
+    expect(connectedUrl.mock.calls[0][0]).toContain("/ws/sessions/s1/qr?access_token=access-prof");
+  });
+
+  it("opens the socket and exposes each token the server pushes", async () => {
+    const first = buildTokenMessage({ session_id: "s1" });
+    const second = buildTokenMessage({ session_id: "s1" });
+    server.use(
+      qrSocket.addEventListener("connection", ({ client }) => {
+        client.send(JSON.stringify(first));
+        client.send(JSON.stringify(second));
+      }),
+    );
+
+    const { result } = renderHook(() => useQrBoard("s1"));
+
+    expect(result.current).toEqual({ token: null, connection: "connecting", ended: false });
+    await waitFor(() => expect(result.current.token).toEqual(second));
+    expect(result.current.connection).toBe("open");
+    expect(result.current.ended).toBe(false);
+  });
+
+  it("ignores malformed frames and keeps the last good token", async () => {
+    const good = buildTokenMessage();
+    server.use(
+      qrSocket.addEventListener("connection", ({ client }) => {
+        client.send(JSON.stringify(good));
+        client.send("not json {");
+      }),
+    );
+
+    const { result } = renderHook(() => useQrBoard("s1"));
+
+    await waitFor(() => expect(result.current.token).toEqual(good));
+  });
+
+  it("marks the session ended when the server closes normally (1000)", async () => {
+    server.use(
+      qrSocket.addEventListener("connection", ({ client }) => {
+        client.close(1000, "session ended");
+      }),
+    );
+
+    const { result } = renderHook(() => useQrBoard("s1"));
+
+    await waitFor(() => expect(result.current.ended).toBe(true));
+    expect(result.current.connection).toBe("closed");
+  });
+
+  describe("polling fallback", () => {
+    it("polls the REST endpoint every second after an abnormal close", async () => {
+      vi.useFakeTimers();
+      const tokens = [buildTokenMessage(), buildTokenMessage()];
+      let polls = 0;
+      server.use(
+        qrSocket.addEventListener("connection", ({ client }) => {
+          client.close(1011, "server error");
+        }),
+        http.get("/api/v1/sessions/:sessionId/qr/current", () => ok(tokens[polls++ % 2])),
+      );
+
+      const { result } = renderHook(() => useQrBoard("s1"));
+      await waitFor(() => expect(result.current.connection).toBe("open"));
+      expect(polls).toBe(0);
+
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await waitFor(() => expect(result.current.token).toEqual(tokens[0]));
+
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await waitFor(() => expect(result.current.token).toEqual(tokens[1]));
+      expect(result.current.ended).toBe(false);
+    });
+
+    it("marks the session ended when polling fails", async () => {
+      vi.useFakeTimers();
+      server.use(
+        qrSocket.addEventListener("connection", ({ client }) => {
+          client.close(1011);
+        }),
+        http.get("/api/v1/sessions/:sessionId/qr/current", () =>
+          apiError(409, "SESSION_NOT_LIVE"),
+        ),
+      );
+
+      const { result } = renderHook(() => useQrBoard("s1"));
+      await waitFor(() => expect(result.current.connection).toBe("open"));
+
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+
+      await waitFor(() => expect(result.current.ended).toBe(true));
+    });
+
+    it("stops polling on unmount", async () => {
+      vi.useFakeTimers();
+      let polls = 0;
+      server.use(
+        qrSocket.addEventListener("connection", ({ client }) => {
+          client.close(1011);
+        }),
+        http.get("/api/v1/sessions/:sessionId/qr/current", () => {
+          polls++;
+          return ok(buildTokenMessage());
+        }),
+      );
+      const { result, unmount } = renderHook(() => useQrBoard("s1"));
+      await waitFor(() => expect(result.current.connection).toBe("open"));
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await waitFor(() => expect(polls).toBe(1));
+
+      unmount();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(polls).toBe(1);
+    });
+  });
+});

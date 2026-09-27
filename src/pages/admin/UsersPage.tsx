@@ -81,6 +81,7 @@ export function UsersPage() {
 
         <div className="mb-4 flex flex-wrap gap-3">
           <Select
+            aria-label="Filter by role"
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value as Role | "")}
             className="w-40"
@@ -93,6 +94,7 @@ export function UsersPage() {
             ))}
           </Select>
           <Select
+            aria-label="Filter by status"
             value={activeFilter}
             onChange={(e) => setActiveFilter(e.target.value as "" | "true" | "false")}
             className="w-40"
