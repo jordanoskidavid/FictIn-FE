@@ -37,7 +37,9 @@ Vitest (jsdom) + React Testing Library + `@testing-library/user-event` + `@testi
 
 - **No real network, ever.** All HTTP and WebSocket traffic goes through MSW. The server uses
   `onUnhandledRequest: "error"`, so a missing handler fails the test — add a handler, never
-  bypass it. Do not mock `fetch`, `api.ts` or `WebSocket` by hand.
+  bypass it. Do not mock `fetch`, `api.ts` or `WebSocket` by hand. (One sanctioned exception:
+  a never-opening `WebSocket` stub via `vi.stubGlobal` to test connect timeouts, which MSW
+  cannot simulate — see the "connect timeout" test in `src/hooks/useQrBoard.test.ts`.)
 - Test files live **next to their source**: `Foo.tsx` → `Foo.test.tsx`.
 - Query by **role/label/text** (`getByRole(..., { name })`, `getByLabelText`). Never by CSS
   class; avoid `data-testid`. If an element has no accessible handle, prefer fixing the markup

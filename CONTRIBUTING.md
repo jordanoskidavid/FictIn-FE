@@ -126,7 +126,8 @@ server.use(http.get("/api/v1/student/attendance", () => delay("infinite"))); // 
 db.users = [buildUser({ full_name: "Ana Student" })];
 ```
 
-**WebSockets** use `ws.link(...)` from MSW — see `src/hooks/useQrBoard.test.ts`.
+**WebSockets** use `ws.link(...)` from MSW — see `src/hooks/useQrBoard.test.ts`. The only hand-written
+WebSocket stub is the never-opening socket in that file's "connect timeout" test (MSW can't simulate a hang).
 
 ## Known follow-ups
 

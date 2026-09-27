@@ -32,7 +32,7 @@ You may run `npx vitest run <file>` to confirm the tests pass and to check for f
 - `fireEvent` instead of `userEvent`.
 
 **3. Real network / improper mocking**
-- Any hand-rolled `fetch`, `XMLHttpRequest`, `WebSocket` or `api.ts` mock (`vi.fn`, `vi.spyOn(global, "fetch")`, `vi.mock("../lib/api")`). Everything must go through MSW (`server.use`, `db`, `ws.link`).
+- Any hand-rolled `fetch`, `XMLHttpRequest`, `WebSocket` or `api.ts` mock (`vi.fn`, `vi.spyOn(global, "fetch")`, `vi.mock("../lib/api")`). Everything must go through MSW (`server.use`, `db`, `ws.link`). Exception: a `vi.stubGlobal("WebSocket", …)` stub that never opens, used only to test connect timeouts (MSW opens mocked sockets immediately).
 - Real URLs or hosts other than the same-origin `/api/v1/...` and `ws://${location.host}/ws/...`.
 - Anything that disables or weakens `onUnhandledRequest: "error"`.
 

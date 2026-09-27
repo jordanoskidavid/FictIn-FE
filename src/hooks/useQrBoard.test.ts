@@ -137,4 +137,69 @@ describe("useQrBoard", () => {
       expect(polls).toBe(1);
     });
   });
+
+  describe("connect timeout", () => {
+    // MSW opens mocked sockets immediately, so it can't simulate a connection that hangs.
+    // This is the one place we stub WebSocket by hand: a socket that never opens.
+    // vi.stubGlobal is undone after the test (unstubGlobals in vitest.config.ts).
+    class NeverOpeningSocket {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSED = 3;
+      static instances: NeverOpeningSocket[] = [];
+      readyState = NeverOpeningSocket.CONNECTING;
+      onopen: (() => void) | null = null;
+      onmessage: ((e: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: { code: number }) => void) | null = null;
+      closeCalls = 0;
+      url: string;
+
+      constructor(url: string) {
+        this.url = url;
+        NeverOpeningSocket.instances.push(this);
+      }
+
+      close() {
+        this.closeCalls++;
+        if (this.readyState === NeverOpeningSocket.CLOSED) return;
+        this.readyState = NeverOpeningSocket.CLOSED;
+        // Browsers report an aborted handshake as an abnormal closure (1006).
+        this.onclose?.({ code: 1006 });
+      }
+    }
+
+    it("gives up on a socket that doesn't open within 4s and falls back to polling", async () => {
+      vi.useFakeTimers();
+      NeverOpeningSocket.instances = [];
+      vi.stubGlobal("WebSocket", NeverOpeningSocket);
+      const token = buildTokenMessage({ session_id: "s1" });
+      let polls = 0;
+      server.use(
+        http.get("/api/v1/sessions/:sessionId/qr/current", () => {
+          polls++;
+          return ok(token);
+        }),
+      );
+
+      const { result } = renderHook(() => useQrBoard("s1"));
+      await act(() => vi.advanceTimersByTimeAsync(3999));
+
+      expect(result.current.connection).toBe("connecting");
+      expect(NeverOpeningSocket.instances[0].closeCalls).toBe(0);
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
+
+      expect(NeverOpeningSocket.instances[0].closeCalls).toBe(1);
+      expect(result.current.connection).toBe("open");
+      expect(polls).toBe(0);
+
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+
+      await waitFor(() => expect(result.current.token).toEqual(token));
+      // close() fired onclose too, but only one polling loop may run.
+      expect(polls).toBe(1);
+      expect(NeverOpeningSocket.instances).toHaveLength(1);
+    });
+  });
 });

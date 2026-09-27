@@ -41,7 +41,7 @@ Conventions (they are not optional):
 - The file goes next to the source as `Name.test.ts(x)`. Import `describe/it/expect/vi` from `vitest`.
 - Render with `renderWithProviders()` from `src/test/renderWithProviders.tsx` and use the `user` it returns.
 - Build data with `src/test/factories.ts` and override only the fields that matter.
-- **Network:** seed `db` from `src/test/handlers.ts`, or override with `server.use(http.x(path, () => ok(...) | apiError(status, code)))`. For loading states use `delay("infinite")`. For WebSockets use `ws.link(...)`. Never mock `fetch`, `api.ts` or `WebSocket` by hand.
+- **Network:** seed `db` from `src/test/handlers.ts`, or override with `server.use(http.x(path, () => ok(...) | apiError(status, code)))`. For loading states use `delay("infinite")`. For WebSockets use `ws.link(...)`. Never mock `fetch`, `api.ts` or `WebSocket` by hand — the only exception is a never-opening WebSocket stub (`vi.stubGlobal`) for connect-timeout tests, which MSW cannot simulate (see `src/hooks/useQrBoard.test.ts`).
 - If an endpoint has no default handler and many tests will need it, add one to `handlers.ts`, shaped like `FrontendDirections.md`.
 - Query with `getByRole(role, { name })`, then `getByLabelText`, then `getByText`. Never use CSS classes or DOM structure. Use `within(dialog|row|table)` to scope.
 - Use `userEvent`, never `fireEvent`.
