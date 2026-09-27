@@ -19,11 +19,17 @@ export function Banner({
 }) {
   return (
     <div
+      role={tone === "error" ? "alert" : "status"}
       className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${TONE_CLASSES[tone]}`}
     >
       <span>{children}</span>
       {onDismiss && (
-        <button onClick={onDismiss} className="shrink-0 opacity-60 hover:opacity-100">
+        <button
+          type="button"
+          aria-label="Dismiss"
+          onClick={onDismiss}
+          className="shrink-0 opacity-60 hover:opacity-100"
+        >
           ✕
         </button>
       )}
