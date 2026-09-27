@@ -108,7 +108,18 @@ export const handlers = [
 
   http.post("/api/v1/auth/logout", () => new HttpResponse(null, { status: 204 })),
 
-  http.post("/api/v1/auth/change-password", () => ok({ status: "password_changed" })),
+  // Mirrors AuthService.ChangePassword: 200 { status }, 401 for a wrong current
+  // password, 422 when the new password equals the current one.
+  http.post("/api/v1/auth/change-password", async ({ request }) => {
+    const body = (await request.json()) as { current_password: string; new_password: string };
+    if (body.current_password !== TEST_PASSWORD) {
+      return apiError(401, "INVALID_CREDENTIALS", "invalid email or password");
+    }
+    if (body.new_password === body.current_password) {
+      return apiError(422, "VALIDATION_ERROR", "request validation failed");
+    }
+    return ok({ status: "password_changed" });
+  }),
 
   http.post("/api/v1/auth/register", async ({ request }) => {
     const body = (await request.json()) as Partial<User>;
