@@ -61,9 +61,11 @@ Vitest (jsdom) + React Testing Library + `@testing-library/user-event` + `@testi
 | --- | --- |
 | `setup.ts` | Global: MSW lifecycle, jest-dom, cleanup, resets `db`, handlers and `localStorage` after each test |
 | `server.ts` | `server.use(...)` for per-test handler overrides |
-| `handlers.ts` | Default handlers for real endpoints; in-memory `db` (`users`, `subjects`, `attendance`); helpers `ok(data)`, `apiError(status, code)`; `TEST_PASSWORD` for login |
-| `factories.ts` | `buildUser`, `buildSubject`, `buildSession`, `buildAttendanceRow`, `buildTokenMessage`, `buildLoginResponse` — pass overrides |
+| `handlers.ts` | Default handlers mirroring the Go backend (`../fictin/internal/handlers` — when it disagrees with `FrontendDirections.md`, the backend code wins); in-memory `db` (`users`, `subjects`, `schedules`, `enrollments`, `sessions`, `attendance`); helpers `ok(data)`, `apiError(status, code)`; `TEST_PASSWORD` for login and change-password |
+| `factories.ts` | `buildUser`, `buildSubject`, `buildSession` (a `SessionView`), `buildSchedule`, `buildEnrollment`, `buildAttendanceRow`, `buildTokenMessage`, `buildLoginResponse` — pass overrides |
 | `renderWithProviders.tsx` | Renders inside `MemoryRouter` + auth. Options: `route`, `path` (for `useParams`), `user` (signed in via the real AuthProvider + MSW), `authValue` (stub context), `advanceTimers`. Returns `{ user: userEvent, ...rtl }` |
+| `RouteStub.tsx` | `<RouteStub name="Board" />` as a destination route; assert navigation with `findByRole("heading", { name: "Board at /path" })` |
+| `downloads.ts` | `mockDownloads()` captures file downloads (filename + Blob) since jsdom can't download |
 
 Auth in tests: access tokens are `access-<userId>`; the `/auth/me` handler resolves the caller
 from `db.users`. Passing `user` to `renderWithProviders` does this setup for you.
@@ -76,5 +78,8 @@ from `db.users`. Passing `user` to `renderWithProviders` does this setup for you
 - Component states (loading/empty/error/data): `src/pages/student/AttendancePage.test.tsx`
 - Form flow + API error: `src/pages/LoginPage.test.tsx`, `src/pages/professor/SubjectsListPage.test.tsx`
 - Routing / guards: `src/App.test.tsx`
+- Navigation to other pages + localStorage: `src/pages/professor/SubjectDetailPage.test.tsx`
+- File download: `src/pages/admin/AttendancePage.test.tsx`
+- Verifying a rendered QR payload: `src/pages/professor/BoardPage.test.tsx`
 
 Use the `write-tests` skill for new tests and the `test-reviewer` agent to review them.

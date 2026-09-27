@@ -57,8 +57,10 @@ src/
     setup.ts                     ← MSW lifecycle, jest-dom, cleanup, resets (runs before every file)
     server.ts                    ← the shared MSW server
     handlers.ts                  ← default API handlers + in-memory `db` + ok()/apiError() helpers
-    factories.ts                 ← buildUser(), buildSubject(), buildAttendanceRow(), …
+    factories.ts                 ← buildUser(), buildSubject(), buildSession(), buildSchedule(), …
     renderWithProviders.tsx      ← render with MemoryRouter + auth, returns { user, ...rtl }
+    RouteStub.tsx                ← placeholder destination route to assert navigation
+    downloads.ts                 ← mockDownloads(): capture file downloads (jsdom can't download)
 ```
 
 Name test files `Thing.test.ts(x)` next to `Thing.ts(x)`.
@@ -102,6 +104,10 @@ renderWithProviders(<SubjectDetailPage />, {
 
 ## Adding or overriding an MSW handler
 
+Default handlers must mirror the **real Go backend** (`../fictin/internal/handlers` and
+`internal/service`): status codes, envelope and error codes. `FrontendDirections.md` is a summary;
+when it disagrees with the backend code, follow the code.
+
 **Default behaviour for an endpoint** (used by every test) → add it to `src/test/handlers.ts`,
 using the real path and the backend's envelope:
 
@@ -134,3 +140,7 @@ WebSocket stub is the never-opening socket in that file's "connect timeout" test
 - `Input`/`Select` render their `hint` inside the `<label>`, so the accessible name of
   fields like "Code" is "Code e.g. CS101 — will be uppercased". Tests match with a regex
   (`getByLabelText(/^Code/)`). Moving hints out of the label + `aria-describedby` would fix it.
+- `api.ts` treats every 401 as an expired access token. On change-password, a wrong current
+  password (backend: 401 `INVALID_CREDENTIALS`) triggers a token refresh and **re-sends the
+  POST** before failing, and the page then shows "Incorrect email or password." Consider
+  skipping the refresh when `error.code !== "UNAUTHORIZED"` and adding page-specific copy.
