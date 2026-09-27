@@ -82,7 +82,13 @@ export function BoardPage() {
         <>
           <div className="rounded-2xl bg-white p-6">
             {qrValue ? (
-              <QRCodeSVG value={qrValue} size={360} level="M" />
+              <QRCodeSVG
+                value={qrValue}
+                size={360}
+                level="M"
+                role="img"
+                aria-label="Attendance QR code"
+              />
             ) : (
               <div className="flex h-[360px] w-[360px] items-center justify-center text-slate-400">
                 Waiting for first token…
