@@ -29,7 +29,7 @@ export function UsersPage() {
       if (roleFilter) query.role = roleFilter;
       if (activeFilter) query.active = activeFilter;
       const data = await api.get<User[]>("/api/v1/admin/users", query);
-      setUsers(data ?? []);
+      setUsers(data);
     } catch (err) {
       setError(errorMessage(err));
     }

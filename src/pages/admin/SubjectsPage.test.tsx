@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AdminSubjectsPage } from "./SubjectsPage";
 import { renderWithProviders } from "../../test/renderWithProviders";
 import { server } from "../../test/server";
-import { apiError, db, ok } from "../../test/handlers";
+import { apiError, db } from "../../test/handlers";
 import { buildSubject } from "../../test/factories";
 
 const renderPage = () => renderWithProviders(<AdminSubjectsPage />, { authValue: {} });
@@ -24,14 +24,6 @@ describe("Admin › Subjects", () => {
 
     expect(await screen.findByText("No subjects yet")).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
-  });
-
-  it("treats a null response as no subjects", async () => {
-    server.use(http.get("/api/v1/admin/subjects", () => ok(null)));
-
-    renderPage();
-
-    expect(await screen.findByText("No subjects yet")).toBeInTheDocument();
   });
 
   it("lists every subject with its professor", async () => {

@@ -16,7 +16,7 @@ export function StudentAttendancePage() {
   useEffect(() => {
     api
       .get<AttendanceRow[]>("/api/v1/student/attendance")
-      .then((data) => setRows(data ?? []))
+      .then((data) => setRows(data))
       .catch((err) => setError(errorMessage(err)));
   }, []);
 

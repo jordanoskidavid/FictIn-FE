@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { StudentSubjectsPage } from "./SubjectsPage";
 import { renderWithProviders } from "../../test/renderWithProviders";
 import { server } from "../../test/server";
-import { apiError, db, ok } from "../../test/handlers";
+import { apiError, db } from "../../test/handlers";
 import { buildSubject } from "../../test/factories";
 
 const renderPage = () => renderWithProviders(<StudentSubjectsPage />, { authValue: {} });
@@ -23,14 +23,6 @@ describe("Student › My subjects", () => {
 
     expect(await screen.findByText("You're not enrolled in any subjects yet")).toBeInTheDocument();
     expect(screen.getByText("Ask your professor to add you.")).toBeInTheDocument();
-  });
-
-  it("treats a null response as no subjects", async () => {
-    server.use(http.get("/api/v1/student/subjects", () => ok(null)));
-
-    renderPage();
-
-    expect(await screen.findByText("You're not enrolled in any subjects yet")).toBeInTheDocument();
   });
 
   it("shows each enrolled subject's code and name", async () => {

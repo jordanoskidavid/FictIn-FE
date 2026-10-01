@@ -4,7 +4,7 @@ import { api } from "../../lib/api";
 import { errorMessage } from "../../lib/errors";
 import { formatDateTime } from "../../lib/format";
 import { clearStoredSessionId } from "../../lib/activeSession";
-import type { AttendanceRow, SessionView } from "../../lib/types";
+import type { AttendanceRow, EnrolledStudent, SessionView } from "../../lib/types";
 import { Card, CardHeader } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Banner } from "../../components/ui/Banner";
@@ -20,6 +20,7 @@ export function SessionPage() {
   const [attendance, setAttendance] = useState<AttendanceRow[] | null>(null);
   const [error, setError] = useState("");
   const [stopping, setStopping] = useState(false);
+  const [roster, setRoster] = useState<EnrolledStudent[] | null>(null);
 
   useEffect(() => {
     void loadAll();
@@ -34,7 +35,13 @@ export function SessionPage() {
         api.get<AttendanceRow[]>(`/api/v1/sessions/${sessionId}/attendance`),
       ]);
       setSession(s);
-      setAttendance(a ?? []);
+      setAttendance(a);
+      // Attendance lists only who was present; the roster tells us who was absent.
+      // Optional: without it the page still works, just without the absent list.
+      api
+        .get<EnrolledStudent[]>(`/api/v1/subjects/${s.subject_id}/enrollments`)
+        .then(setRoster)
+        .catch(() => undefined);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -58,6 +65,10 @@ export function SessionPage() {
   if (!session) {
     return error ? <Banner tone="error">{error}</Banner> : <PageSpinner />;
   }
+
+  const presentIds = new Set(attendance?.map((row) => row.student_id));
+  const enrolled = roster?.length ? roster : null; // nothing to compare against without a roster
+  const absent = enrolled && attendance ? enrolled.filter((s) => !presentIds.has(s.student_id)) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -110,7 +121,9 @@ export function SessionPage() {
           </div>
           <div>
             <dt className="text-slate-500">Present</dt>
-            <dd className="font-medium text-slate-900">{attendance?.length ?? "—"}</dd>
+            <dd className="font-medium text-slate-900">
+              {attendance ? (enrolled ? `${attendance.length} of ${enrolled.length}` : attendance.length) : "—"}
+            </dd>
           </div>
         </dl>
       </Card>
@@ -130,7 +143,7 @@ export function SessionPage() {
         ) : attendance.length === 0 ? (
           <EmptyState title="No one has scanned in yet" />
         ) : (
-          <Table>
+          <Table label="Present students">
             <Thead>
               <Th>Student</Th>
               <Th>Code</Th>
@@ -148,6 +161,30 @@ export function SessionPage() {
           </Table>
         )}
       </Card>
+
+      {absent && (
+        <Card>
+          <CardHeader title="Absent" subtitle="Enrolled students who didn't scan in." />
+          {absent.length === 0 ? (
+            <EmptyState title="Everyone enrolled was present" />
+          ) : (
+            <Table label="Absent students">
+              <Thead>
+                <Th>Student</Th>
+                <Th>Code</Th>
+              </Thead>
+              <Tbody>
+                {absent.map((s) => (
+                  <tr key={s.student_id}>
+                    <Td>{s.full_name}</Td>
+                    <Td>{s.student_code ?? "—"}</Td>
+                  </tr>
+                ))}
+              </Tbody>
+            </Table>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

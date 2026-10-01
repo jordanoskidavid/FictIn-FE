@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { api } from "../lib/api";
+import { api, setPasswordChangeRequiredHandler } from "../lib/api";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "../lib/tokenStore";
 import type { LoginResponse, User } from "../lib/types";
 import { AuthContext } from "./auth-context";
@@ -30,6 +30,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // The server blocks everything but /auth/me and change-password until a temporary
+  // password is replaced; flagging the user lets ProtectedRoute redirect there.
+  useEffect(() => {
+    setPasswordChangeRequiredHandler(() => {
+      setUser((u) => (u && !u.must_change_password ? { ...u, must_change_password: true } : u));
+    });
+    return () => setPasswordChangeRequiredHandler(null);
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

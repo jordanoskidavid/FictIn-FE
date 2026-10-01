@@ -21,7 +21,7 @@ export function SubjectsListPage() {
     setError("");
     try {
       const data = await api.get<Subject[]>("/api/v1/subjects");
-      setSubjects(data ?? []);
+      setSubjects(data);
     } catch (err) {
       setError(errorMessage(err));
     }

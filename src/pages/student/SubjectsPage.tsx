@@ -14,7 +14,7 @@ export function StudentSubjectsPage() {
   useEffect(() => {
     api
       .get<Subject[]>("/api/v1/student/subjects")
-      .then((data) => setSubjects(data ?? []))
+      .then((data) => setSubjects(data))
       .catch((err) => setError(errorMessage(err)));
   }, []);
 

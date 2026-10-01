@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 
-export function Table({ children }: { children: ReactNode }) {
+export function Table({ children, label }: { children: ReactNode; label?: string }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="w-full text-left text-sm">{children}</table>
+      <table aria-label={label} className="w-full text-left text-sm">
+        {children}
+      </table>
     </div>
   );
 }

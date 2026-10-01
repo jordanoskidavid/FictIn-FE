@@ -46,7 +46,8 @@ export function BoardPage() {
     try {
       await api.post(`/api/v1/sessions/${sessionId}/stop`);
       if (subjectId) clearStoredSessionId(subjectId);
-      navigate(subjectId ? `/professor/subjects/${subjectId}` : "/professor/subjects");
+      if (subjectId) navigate(`/professor/subjects/${subjectId}`, { state: { endedSessionId: sessionId } });
+      else navigate(`/professor/sessions/${sessionId}`);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -71,12 +72,15 @@ export function BoardPage() {
       {ended ? (
         <div className="flex flex-col items-center gap-4 text-center">
           <p className="text-lg font-medium">This session has ended.</p>
-          <Button
-            variant="secondary"
-            onClick={() => navigate(subjectId ? `/professor/subjects/${subjectId}` : "/professor/subjects")}
-          >
-            Back to subject
-          </Button>
+          <div className="flex flex-wrap justify-center gap-3">
+            <Button onClick={() => navigate(`/professor/sessions/${sessionId}`)}>View attendance</Button>
+            <Button
+              variant="secondary"
+              onClick={() => navigate(subjectId ? `/professor/subjects/${subjectId}` : "/professor/subjects")}
+            >
+              Back to subject
+            </Button>
+          </div>
         </div>
       ) : (
         <>

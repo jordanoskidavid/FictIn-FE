@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../../lib/api";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { api, ApiError } from "../../lib/api";
 import { errorMessage } from "../../lib/errors";
-import { formatDayOfWeek, formatTime } from "../../lib/format";
+import { formatDateTime, formatDayOfWeek, formatTime } from "../../lib/format";
+import { statusTone } from "../../lib/status";
 import { clearStoredSessionId, getStoredSessionId, setStoredSessionId } from "../../lib/activeSession";
-import type { ClassSchedule, ClassSession, EnrolledStudent, SubjectDetail } from "../../lib/types";
+import type { ClassSchedule, ClassSession, EnrolledStudent, SessionSummary, SubjectDetail } from "../../lib/types";
 import { Card, CardHeader } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { Input, Select } from "../../components/ui/Input";
@@ -15,9 +16,17 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Table, Thead, Th, Tbody, Td } from "../../components/ui/Table";
 import { Badge } from "../../components/ui/Badge";
 
+/** The already-live session's id from a start-session CONFLICT (`details.live_session_id`). */
+function liveSessionIdFromConflict(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.code !== "CONFLICT") return null;
+  const details = err.details as { live_session_id?: unknown } | null | undefined;
+  return typeof details?.live_session_id === "string" ? details.live_session_id : null;
+}
+
 export function SubjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const subjectId = id!;
 
   const [detail, setDetail] = useState<SubjectDetail | null>(null);
@@ -25,12 +34,19 @@ export function SubjectDetailPage() {
   const [liveSession, setLiveSession] = useState<ClassSession | null>(null);
   const [starting, setStarting] = useState(false);
   const [scheduleForStart, setScheduleForStart] = useState("");
+  const [conflictSessionId, setConflictSessionId] = useState<string | null>(null);
+  const [stoppingExisting, setStoppingExisting] = useState(false);
+  const [sessionsVersion, setSessionsVersion] = useState(0);
+  // Set after a stop here, or by the board's "End session" via router state.
+  const [endedSessionId, setEndedSessionId] = useState<string | null>(
+    (location.state as { endedSessionId?: string } | null)?.endedSessionId ?? null,
+  );
 
   async function load() {
     setError("");
     try {
       const data = await api.get<SubjectDetail>(`/api/v1/subjects/${subjectId}`);
-      setDetail({ ...data, schedules: data.schedules ?? [], roster: data.roster ?? [] });
+      setDetail(data);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -68,9 +84,37 @@ export function SubjectDetailPage() {
       setLiveSession(session);
       navigate(`/professor/sessions/${session.id}/board`);
     } catch (err) {
-      setError(errorMessage(err));
+      const existingId = liveSessionIdFromConflict(err);
+      if (existingId) setConflictSessionId(existingId);
+      else setError(errorMessage(err));
     } finally {
       setStarting(false);
+    }
+  }
+
+  // The start CONFLICT is the only way to rediscover a live session once its board tab is gone.
+  function handleResume() {
+    if (!conflictSessionId) return;
+    setStoredSessionId(subjectId, conflictSessionId);
+    navigate(`/professor/sessions/${conflictSessionId}/board`);
+  }
+
+  async function handleStopExisting() {
+    if (!conflictSessionId) return;
+    setError("");
+    setStoppingExisting(true);
+    try {
+      await api.post(`/api/v1/sessions/${conflictSessionId}/stop`);
+      clearStoredSessionId(subjectId);
+      setEndedSessionId(conflictSessionId);
+      setConflictSessionId(null);
+      setSessionsVersion((v) => v + 1);
+    } catch (err) {
+      // CONFLICT here means it's no longer live (ended elsewhere), so starting is possible again.
+      if (err instanceof ApiError && err.code === "CONFLICT") setConflictSessionId(null);
+      else setError(errorMessage(err));
+    } finally {
+      setStoppingExisting(false);
     }
   }
 
@@ -79,7 +123,9 @@ export function SubjectDetailPage() {
     try {
       await api.post(`/api/v1/sessions/${liveSession.id}/stop`);
       clearStoredSessionId(subjectId);
+      setEndedSessionId(liveSession.id);
       setLiveSession(null);
+      setSessionsVersion((v) => v + 1);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -121,6 +167,15 @@ export function SubjectDetailPage() {
         </Banner>
       )}
 
+      {endedSessionId && (
+        <Banner tone="success" onDismiss={() => setEndedSessionId(null)}>
+          Session ended.{" "}
+          <Link to={`/professor/sessions/${endedSessionId}`} className="font-medium underline">
+            View attendance
+          </Link>
+        </Banner>
+      )}
+
       <Card>
         <CardHeader title="Live session" subtitle="Only one live session per subject is allowed." />
         {liveSession ? (
@@ -135,6 +190,19 @@ export function SubjectDetailPage() {
             <Button variant="danger" onClick={handleStop}>
               Stop session
             </Button>
+          </div>
+        ) : conflictSessionId ? (
+          <div className="flex flex-col gap-3">
+            <Banner tone="info">
+              A session for this subject is already live, maybe on a board you closed. Resume it or
+              stop it to start a new one.
+            </Banner>
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={handleResume}>Resume</Button>
+              <Button variant="danger" onClick={handleStopExisting} loading={stoppingExisting}>
+                Stop
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="flex flex-wrap items-end gap-3">
@@ -158,6 +226,8 @@ export function SubjectDetailPage() {
         )}
       </Card>
 
+      <PastSessionsCard subjectId={subjectId} refreshKey={sessionsVersion} />
+
       <SchedulesCard
         subjectId={subjectId}
         schedules={schedules}
@@ -170,6 +240,63 @@ export function SubjectDetailPage() {
         onEnrolled={(e) => setDetail((d) => (d ? { ...d, roster: [...d.roster, e] } : d))}
       />
     </div>
+  );
+}
+
+function PastSessionsCard({ subjectId, refreshKey }: { subjectId: string; refreshKey: number }) {
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<SessionSummary[]>(`/api/v1/subjects/${subjectId}/sessions`)
+      .then((data) => {
+        if (cancelled) return;
+        setSessions(data);
+        setError("");
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [subjectId, refreshKey]);
+
+  return (
+    <Card>
+      <CardHeader title="Past sessions" subtitle="Open a session to see who attended." />
+      {error && <Banner tone="error">{error}</Banner>}
+      {sessions === null ? (
+        !error && <PageSpinner />
+      ) : sessions.length === 0 ? (
+        <EmptyState title="No sessions yet" hint="Start a session to take attendance." />
+      ) : (
+        <Table label="Past sessions">
+          <Thead>
+            <Th>Started</Th>
+            <Th>Status</Th>
+            <Th>Present</Th>
+          </Thead>
+          <Tbody>
+            {sessions.map((s) => (
+              <tr key={s.id}>
+                <Td>
+                  <Link to={`/professor/sessions/${s.id}`} className="font-medium text-blue-700 hover:underline">
+                    {formatDateTime(s.started_at ?? s.created_at)}
+                  </Link>
+                </Td>
+                <Td>
+                  <Badge tone={statusTone(s.status)}>{s.status}</Badge>
+                </Td>
+                <Td>{s.attendance_count}</Td>
+              </tr>
+            ))}
+          </Tbody>
+        </Table>
+      )}
+    </Card>
   );
 }
 
@@ -289,7 +416,7 @@ function RosterCard({
       const value = identifier.trim();
       const body = value.includes("-") && value.length > 20 ? { student_id: value } : { student_code: value };
       await api.post(`/api/v1/subjects/${subjectId}/enrollments`, body);
-      const updatedRoster = (await api.get<EnrolledStudent[]>(`/api/v1/subjects/${subjectId}/enrollments`)) ?? [];
+      const updatedRoster = await api.get<EnrolledStudent[]>(`/api/v1/subjects/${subjectId}/enrollments`);
       const added = updatedRoster.find((r) => !roster.some((existing) => existing.enrollment_id === r.enrollment_id));
       if (added) onEnrolled(added);
       setIdentifier("");

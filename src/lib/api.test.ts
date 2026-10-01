@@ -1,10 +1,10 @@
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { server } from "../test/server";
 import { apiError, db, ok } from "../test/handlers";
 import { buildLoginResponse, buildUser } from "../test/factories";
 import { mockDownloads } from "../test/downloads";
-import { api, ApiError, apiRequest, downloadCsv, wsUrl } from "./api";
+import { api, ApiError, apiRequest, downloadCsv, setPasswordChangeRequiredHandler, wsUrl } from "./api";
 import { getAccessToken, getRefreshToken, setTokens } from "./tokenStore";
 
 describe("api client", () => {
@@ -89,6 +89,58 @@ describe("api client", () => {
     await api.get("/api/v1/admin/users", { role: "student", active: undefined, page: 2 });
 
     expect(search).toBe("?role=student&page=2");
+  });
+});
+
+describe("api client — PASSWORD_CHANGE_REQUIRED", () => {
+  const passwordChangeRequired = () =>
+    apiError(403, "PASSWORD_CHANGE_REQUIRED", "password change required");
+  let onRequired: Mock<() => void>;
+
+  beforeEach(() => {
+    onRequired = vi.fn();
+    setPasswordChangeRequiredHandler(onRequired);
+  });
+
+  afterEach(() => {
+    setPasswordChangeRequiredHandler(null);
+  });
+
+  it("notifies the registered handler and still throws the error", async () => {
+    server.use(http.get("/api/v1/ping", passwordChangeRequired));
+
+    const error = await api.get("/api/v1/ping").catch((e: unknown) => e);
+
+    expect(onRequired).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 403, code: "PASSWORD_CHANGE_REQUIRED" });
+  });
+
+  it("notifies the handler when a CSV download is blocked", async () => {
+    server.use(http.get("/api/v1/export", passwordChangeRequired));
+
+    await expect(downloadCsv("/api/v1/export", {})).rejects.toMatchObject({
+      code: "PASSWORD_CHANGE_REQUIRED",
+    });
+
+    expect(onRequired).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not notify the handler for other errors", async () => {
+    server.use(http.get("/api/v1/ping", () => apiError(403, "FORBIDDEN")));
+
+    await api.get("/api/v1/ping").catch(() => undefined);
+
+    expect(onRequired).not.toHaveBeenCalled();
+  });
+
+  it("stops notifying once the handler is unregistered, but still throws", async () => {
+    setPasswordChangeRequiredHandler(null);
+    server.use(http.get("/api/v1/ping", passwordChangeRequired));
+
+    await expect(api.get("/api/v1/ping")).rejects.toMatchObject({ code: "PASSWORD_CHANGE_REQUIRED" });
+
+    expect(onRequired).not.toHaveBeenCalled();
   });
 });
 

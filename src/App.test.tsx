@@ -1,6 +1,9 @@
 import { screen } from "@testing-library/react";
+import { http } from "msw";
 import { describe, expect, it } from "vitest";
 import App from "./App";
+import { server } from "./test/server";
+import { apiError, db } from "./test/handlers";
 import { renderWithProviders } from "./test/renderWithProviders";
 import { buildUser } from "./test/factories";
 import { getAccessToken } from "./lib/tokenStore";
@@ -36,6 +39,32 @@ describe("App routing", () => {
       route: "/student/attendance",
       user: buildUser({ role: "student", must_change_password: true }),
     });
+
+    expect(await screen.findByRole("heading", { name: "Set a new password" })).toBeInTheDocument();
+  });
+
+  it("sends a user to change their password when the server demands it mid-session", async () => {
+    server.use(
+      http.get("/api/v1/subjects", () =>
+        apiError(403, "PASSWORD_CHANGE_REQUIRED", "password change required"),
+      ),
+    );
+
+    renderWithProviders(<App />, { route: "/professor/subjects", user: buildUser({ role: "professor" }) });
+
+    expect(await screen.findByRole("heading", { name: "Set a new password" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Your subjects" })).not.toBeInTheDocument();
+  });
+
+  it("sends a user to change their password once the server starts requiring it", async () => {
+    const professor = buildUser({ role: "professor" });
+    const { user } = renderWithProviders(<App />, { route: "/professor/subjects", user: professor });
+    await user.click(await screen.findByRole("button", { name: "New subject" }));
+    db.users.find((u) => u.id === professor.id)!.must_change_password = true;
+
+    await user.type(screen.getByLabelText("Name"), "Databases");
+    await user.type(screen.getByLabelText(/^Code/), "CS101");
+    await user.click(screen.getByRole("button", { name: "Create subject" }));
 
     expect(await screen.findByRole("heading", { name: "Set a new password" })).toBeInTheDocument();
   });

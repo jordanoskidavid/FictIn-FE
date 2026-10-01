@@ -10,11 +10,11 @@ const MESSAGES: Record<string, string> = {
   RATE_LIMITED: "You're going too fast — slow down and try again.",
   INVALID_CREDENTIALS: "Incorrect email or password.",
   ACCOUNT_INACTIVE: "This account has been deactivated.",
+  PASSWORD_CHANGE_REQUIRED: "You need to change your password before continuing.",
   TOKEN_EXPIRED: "That QR code expired — scan the current one.",
   TOKEN_INVALID: "That QR code isn't valid for this session.",
   SESSION_NOT_LIVE: "This session isn't live right now.",
   NOT_ENROLLED: "You're not enrolled in this subject.",
-  ALREADY_MARKED: "Already marked present.",
   INTERNAL: "Something went wrong on our end.",
 };
 

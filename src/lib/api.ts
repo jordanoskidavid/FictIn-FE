@@ -17,6 +17,18 @@ export class ApiError extends Error {
   }
 }
 
+let onPasswordChangeRequired: (() => void) | null = null;
+
+/** Registers the callback run when the server answers 403 PASSWORD_CHANGE_REQUIRED. */
+export function setPasswordChangeRequiredHandler(handler: (() => void) | null): void {
+  onPasswordChangeRequired = handler;
+}
+
+function toApiError(status: number, body: ApiErrorBody): ApiError {
+  if (body.code === "PASSWORD_CHANGE_REQUIRED") onPasswordChangeRequired?.();
+  return new ApiError(status, body);
+}
+
 let refreshPromise: Promise<boolean> | null = null;
 
 async function doRefresh(): Promise<boolean> {
@@ -108,7 +120,7 @@ export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Pr
 
   if (!res.ok) {
     const body = json?.error ?? { code: "INTERNAL", message: res.statusText || "Request failed" };
-    throw new ApiError(res.status, body);
+    throw toApiError(res.status, body);
   }
 
   return json?.data as T;
@@ -132,7 +144,7 @@ export async function downloadCsv(path: string, query: Record<string, string>): 
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, body);
+    throw toApiError(res.status, body);
   }
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") ?? "";

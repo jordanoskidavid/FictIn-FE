@@ -68,7 +68,10 @@ Vitest (jsdom) + React Testing Library + `@testing-library/user-event` + `@testi
 | `downloads.ts` | `mockDownloads()` captures file downloads (filename + Blob) since jsdom can't download |
 
 Auth in tests: access tokens are `access-<userId>`; the `/auth/me` handler resolves the caller
-from `db.users`. Passing `user` to `renderWithProviders` does this setup for you.
+from `db.users`. Passing `user` to `renderWithProviders` does this setup for you. Like the
+backend, a catch-all handler answers `401` for a signed-in caller with `is_active: false` and
+`403 PASSWORD_CHANGE_REQUIRED` for one with `must_change_password: true` (except `/auth/me` and
+`/auth/change-password`).
 
 ## Reference tests to copy
 

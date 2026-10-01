@@ -34,7 +34,7 @@ export function AdminAttendancePage() {
     setLoading(true);
     try {
       const data = await api.get<AttendanceRow[]>("/api/v1/admin/attendance", buildQuery());
-      setRows(data ?? []);
+      setRows(data);
     } catch (err) {
       setError(errorMessage(err));
     } finally {

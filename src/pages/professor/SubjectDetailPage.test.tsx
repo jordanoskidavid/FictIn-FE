@@ -8,6 +8,7 @@ import { RouteStub } from "../../test/RouteStub";
 import { server } from "../../test/server";
 import { apiError, db } from "../../test/handlers";
 import {
+  buildAttendanceRow,
   buildEnrollment,
   buildSchedule,
   buildSession,
@@ -24,6 +25,7 @@ function renderDetail() {
       <Route path="/professor/subjects/:id" element={<SubjectDetailPage />} />
       <Route path="/professor/subjects" element={<RouteStub name="Subjects list" />} />
       <Route path="/professor/sessions/:sessionId/board" element={<RouteStub name="Board" />} />
+      <Route path="/professor/sessions/:sessionId" element={<RouteStub name="Attendance" />} />
     </Routes>,
     { route: `/professor/subjects/${SUBJECT_ID}`, authValue: {} },
   );
@@ -108,7 +110,79 @@ describe("Professor › Subject detail", () => {
       expect(body).toEqual({ schedule_id: "5c3d9a1e-2b4f-4c6d-8e7f-90a1b2c3d4e5" });
     });
 
-    it("explains when a live session already exists", async () => {
+    describe("when a session is already live but forgotten (board tab closed)", () => {
+      let live: ReturnType<typeof buildSession>;
+
+      beforeEach(() => {
+        live = buildSession({ subject_id: SUBJECT_ID, status: "live" });
+        db.sessions = [live];
+      });
+
+      async function startAndHitConflict() {
+        const result = await renderLoaded();
+        await result.user.click(screen.getByRole("button", { name: "Start session" }));
+        await screen.findByText(/already live/);
+        return result;
+      }
+
+      it("offers to resume or stop it instead of a dead-end error", async () => {
+        const { user } = await renderLoaded();
+
+        await user.click(screen.getByRole("button", { name: "Start session" }));
+
+        expect(await screen.findByRole("button", { name: "Resume" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Start session" })).not.toBeInTheDocument();
+      });
+
+      it("resumes by remembering the session and opening its board", async () => {
+        const { user } = await startAndHitConflict();
+
+        await user.click(screen.getByRole("button", { name: "Resume" }));
+
+        expect(
+          await screen.findByRole("heading", { name: `Board at /professor/sessions/${live.id}/board` }),
+        ).toBeInTheDocument();
+        expect(getStoredSessionId(SUBJECT_ID)).toBe(live.id);
+      });
+
+      it("stops it and lets the professor start a new session", async () => {
+        const { user } = await startAndHitConflict();
+
+        await user.click(screen.getByRole("button", { name: "Stop" }));
+
+        expect(await screen.findByRole("button", { name: "Start session" })).toBeEnabled();
+        expect(live.status).toBe("ended");
+        expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+        expect(screen.getByRole("link", { name: "View attendance" })).toHaveAttribute(
+          "href",
+          `/professor/sessions/${live.id}`,
+        );
+      });
+
+      it("returns to the start form if it was already ended elsewhere", async () => {
+        const { user } = await startAndHitConflict();
+        live.status = "ended"; // e.g. stopped from another device
+
+        await user.click(screen.getByRole("button", { name: "Stop" }));
+
+        expect(await screen.findByRole("button", { name: "Start session" })).toBeEnabled();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      });
+
+      it("keeps the choice open and explains when stopping fails", async () => {
+        server.use(http.post("/api/v1/sessions/:id/stop", () => apiError(500, "INTERNAL")));
+        const { user } = await startAndHitConflict();
+
+        await user.click(screen.getByRole("button", { name: "Stop" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our end.");
+        expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+      });
+    });
+
+    it("shows a plain error for a conflict without a live session id", async () => {
       server.use(
         http.post("/api/v1/sessions/:subjectId/start", () =>
           apiError(409, "CONFLICT", "a live session already exists for this subject"),
@@ -165,6 +239,20 @@ describe("Professor › Subject detail", () => {
       expect(getStoredSessionId(SUBJECT_ID)).toBeNull();
     });
 
+    it("links to the attendance of the session it just stopped", async () => {
+      const live = buildSession({ subject_id: SUBJECT_ID, status: "live" });
+      db.sessions = [live];
+      setStoredSessionId(SUBJECT_ID, live.id);
+      const { user } = renderDetail();
+
+      await user.click(await screen.findByRole("button", { name: "Stop session" }));
+      await user.click(await screen.findByRole("link", { name: "View attendance" }));
+
+      expect(
+        await screen.findByRole("heading", { name: `Attendance at /professor/sessions/${live.id}` }),
+      ).toBeInTheDocument();
+    });
+
     it("keeps the session shown as live if stopping fails", async () => {
       const live = buildSession({ subject_id: SUBJECT_ID, status: "live" });
       db.sessions = [live];
@@ -192,6 +280,69 @@ describe("Professor › Subject detail", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "That conflicts with existing data.",
       );
+    });
+  });
+
+  describe("past sessions", () => {
+    it("shows an empty state before the first session", async () => {
+      await renderLoaded();
+
+      expect(await screen.findByText("No sessions yet")).toBeInTheDocument();
+    });
+
+    it("lists sessions newest first with how many were present", async () => {
+      const older = buildSession({ subject_id: SUBJECT_ID, status: "ended", created_at: "2026-09-01T10:00:00Z" });
+      const newer = buildSession({ subject_id: SUBJECT_ID, status: "ended", created_at: "2026-09-08T10:00:00Z" });
+      db.sessions = [older, newer, buildSession({ subject_id: "other-subject", status: "ended" })];
+      db.attendance = [
+        buildAttendanceRow({ session_id: older.id }),
+        buildAttendanceRow({ session_id: older.id }),
+      ];
+
+      await renderLoaded();
+
+      const table = await screen.findByRole("table", { name: "Past sessions" });
+      const [, first, second, ...rest] = within(table).getAllByRole("row");
+      expect(rest).toHaveLength(0);
+      expect(within(first).getByRole("link")).toHaveAttribute("href", `/professor/sessions/${newer.id}`);
+      expect(within(first).getAllByRole("cell")[2]).toHaveTextContent("0");
+      expect(within(second).getByRole("link")).toHaveAttribute("href", `/professor/sessions/${older.id}`);
+      expect(within(second).getAllByRole("cell")[2]).toHaveTextContent("2");
+    });
+
+    it("opens a session's attendance", async () => {
+      const past = buildSession({ subject_id: SUBJECT_ID, status: "ended" });
+      db.sessions = [past];
+      const { user } = await renderLoaded();
+      const table = await screen.findByRole("table", { name: "Past sessions" });
+
+      await user.click(within(table).getByRole("link"));
+
+      expect(
+        await screen.findByRole("heading", { name: `Attendance at /professor/sessions/${past.id}` }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the session as ended after it's stopped here", async () => {
+      const live = buildSession({ subject_id: SUBJECT_ID, status: "live" });
+      db.sessions = [live];
+      setStoredSessionId(SUBJECT_ID, live.id);
+      const { user } = renderDetail();
+      const table = await screen.findByRole("table", { name: "Past sessions" });
+      expect(within(table).getByText("live")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Stop session" }));
+
+      expect(await within(table).findByText("ended")).toBeInTheDocument();
+    });
+
+    it("explains when the history can't be loaded", async () => {
+      server.use(http.get("/api/v1/subjects/:id/sessions", () => apiError(500, "INTERNAL")));
+
+      await renderLoaded();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our end.");
+      expect(screen.getByRole("button", { name: "Start session" })).toBeInTheDocument();
     });
   });
 

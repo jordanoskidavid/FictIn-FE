@@ -5,7 +5,7 @@ import { SessionPage } from "./SessionPage";
 import { renderWithProviders } from "../../test/renderWithProviders";
 import { server } from "../../test/server";
 import { apiError, db } from "../../test/handlers";
-import { buildAttendanceRow, buildSession } from "../../test/factories";
+import { buildAttendanceRow, buildEnrollment, buildSession } from "../../test/factories";
 import { getStoredSessionId, setStoredSessionId } from "../../lib/activeSession";
 
 const SESSION_ID = "sess-1";
@@ -74,7 +74,7 @@ describe("Professor › Session detail", () => {
 
       renderSession();
 
-      const table = await screen.findByRole("table");
+      const table = await screen.findByRole("table", { name: "Present students" });
       expect(within(table).getAllByRole("row")).toHaveLength(3);
       expect(within(screen.getByRole("row", { name: /Ana Student/ })).getByRole("cell", { name: "S0001" }))
         .toBeInTheDocument();
@@ -121,6 +121,66 @@ describe("Professor › Session detail", () => {
 
       expect(await screen.findByRole("cell", { name: "Late Larry" })).toBeInTheDocument();
       expect(detail("Present")).toHaveTextContent("1");
+    });
+  });
+
+  describe("absent students", () => {
+    beforeEach(() => {
+      db.enrollments = [
+        buildEnrollment({ subject_id: SUBJECT_ID, student_id: "stu-ana", full_name: "Ana Student", student_code: "S0001" }),
+        buildEnrollment({ subject_id: SUBJECT_ID, student_id: "stu-mila", full_name: "Mila Novak", student_code: "S0002" }),
+        buildEnrollment({ subject_id: SUBJECT_ID, student_id: "stu-ivo", full_name: "Ivo Petrov", student_code: undefined }),
+      ];
+    });
+
+    it("lists enrolled students who didn't scan in", async () => {
+      db.attendance = [
+        buildAttendanceRow({ session_id: SESSION_ID, student_id: "stu-ana", student_name: "Ana Student" }),
+      ];
+
+      renderSession();
+
+      const absentTable = await screen.findByRole("table", { name: "Absent students" });
+      expect(within(absentTable).getAllByRole("row")).toHaveLength(3);
+      expect(within(absentTable).getByRole("row", { name: /Mila Novak/ })).toHaveTextContent("S0002");
+      expect(within(absentTable).getByRole("row", { name: /Ivo Petrov/ })).toHaveTextContent("—");
+      expect(within(absentTable).queryByText("Ana Student")).not.toBeInTheDocument();
+      expect(detail("Present")).toHaveTextContent("1 of 3");
+    });
+
+    it("says so when everyone enrolled was present", async () => {
+      db.attendance = ["stu-ana", "stu-mila", "stu-ivo"].map((id) =>
+        buildAttendanceRow({ session_id: SESSION_ID, student_id: id }),
+      );
+
+      renderSession();
+
+      expect(await screen.findByText("Everyone enrolled was present")).toBeInTheDocument();
+      expect(detail("Present")).toHaveTextContent("3 of 3");
+    });
+
+    it("still shows who was present when the roster can't be loaded", async () => {
+      server.use(http.get("/api/v1/subjects/:id/enrollments", () => apiError(500, "INTERNAL")));
+      db.attendance = [
+        buildAttendanceRow({ session_id: SESSION_ID, student_id: "stu-ana", student_name: "Ana Student" }),
+      ];
+
+      renderSession();
+
+      expect(await screen.findByRole("cell", { name: "Ana Student" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Absent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("hides the absent list when nobody is enrolled", async () => {
+      db.enrollments = [];
+      db.attendance = [buildAttendanceRow({ session_id: SESSION_ID, student_name: "Ana Student" })];
+
+      renderSession();
+
+      expect(await screen.findByRole("cell", { name: "Ana Student" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Absent" })).not.toBeInTheDocument();
+      expect(detail("Present")).toHaveTextContent(/^1$/);
     });
   });
 

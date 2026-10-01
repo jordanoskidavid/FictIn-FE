@@ -15,7 +15,7 @@ export function AdminSubjectsPage() {
   useEffect(() => {
     api
       .get<Subject[]>("/api/v1/admin/subjects")
-      .then((data) => setSubjects(data ?? []))
+      .then((data) => setSubjects(data))
       .catch((err) => setError(errorMessage(err)));
   }, []);
 

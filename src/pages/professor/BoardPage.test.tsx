@@ -8,7 +8,8 @@ import { renderWithProviders } from "../../test/renderWithProviders";
 import { RouteStub } from "../../test/RouteStub";
 import { server } from "../../test/server";
 import { apiError, db } from "../../test/handlers";
-import { buildSession, buildTokenMessage } from "../../test/factories";
+import { buildSession, buildSubject, buildTokenMessage } from "../../test/factories";
+import { SubjectDetailPage } from "./SubjectDetailPage";
 import { getStoredSessionId, setStoredSessionId } from "../../lib/activeSession";
 import type { TokenMessage } from "../../lib/types";
 
@@ -59,6 +60,7 @@ function renderBoard() {
       <Route path="/professor/sessions/:sessionId/board" element={<BoardPage />} />
       <Route path="/professor/subjects/:id" element={<RouteStub name="Subject" />} />
       <Route path="/professor/subjects" element={<RouteStub name="Subjects list" />} />
+      <Route path="/professor/sessions/:sessionId" element={<RouteStub name="Attendance" />} />
     </Routes>,
     { route: `/professor/sessions/${SESSION_ID}/board`, authValue: {} },
   );
@@ -134,7 +136,7 @@ describe("Professor › QR board", () => {
     expect(getStoredSessionId(SUBJECT_ID)).toBeNull();
   });
 
-  it("falls back to the subjects list when the session's subject is unknown", async () => {
+  it("falls back to the session's attendance when its subject is unknown", async () => {
     streamTokens();
     server.use(http.get("/api/v1/sessions/:id", () => apiError(404, "NOT_FOUND")));
     const sessionLookup = trackSessionLookup();
@@ -144,7 +146,7 @@ describe("Professor › QR board", () => {
     await user.click(screen.getByRole("button", { name: "End session" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Subjects list at /professor/subjects" }),
+      await screen.findByRole("heading", { name: `Attendance at /professor/sessions/${SESSION_ID}` }),
     ).toBeInTheDocument();
   });
 
@@ -178,5 +180,44 @@ describe("Professor › QR board", () => {
     expect(
       await screen.findByRole("heading", { name: `Subject at /professor/subjects/${SUBJECT_ID}` }),
     ).toBeInTheDocument();
+  });
+
+  it("opens the session's attendance from the ended screen", async () => {
+    server.use(
+      qrSocket.addEventListener("connection", ({ client }) => {
+        client.close(1000, "session ended");
+      }),
+    );
+    const { user } = renderBoard();
+
+    await user.click(await screen.findByRole("button", { name: "View attendance" }));
+
+    expect(
+      await screen.findByRole("heading", { name: `Attendance at /professor/sessions/${SESSION_ID}` }),
+    ).toBeInTheDocument();
+  });
+
+  it("links to the ended session's attendance from the subject page", async () => {
+    db.subjects = [buildSubject({ id: SUBJECT_ID, name: "Algorithms" })];
+    streamTokens(buildTokenMessage({ session_id: SESSION_ID }));
+    const sessionLookup = trackSessionLookup();
+    const { user } = renderWithProviders(
+      <Routes>
+        <Route path="/professor/sessions/:sessionId/board" element={<BoardPage />} />
+        <Route path="/professor/subjects/:id" element={<SubjectDetailPage />} />
+      </Routes>,
+      { route: `/professor/sessions/${SESSION_ID}/board`, authValue: {} },
+    );
+    await screen.findByRole("img", { name: "Attendance QR code" });
+    await sessionLookup();
+
+    await user.click(screen.getByRole("button", { name: "End session" }));
+
+    expect(await screen.findByRole("heading", { name: "Algorithms" })).toBeInTheDocument();
+    expect(screen.getByText(/^Session ended[.]/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View attendance" })).toHaveAttribute(
+      "href",
+      `/professor/sessions/${SESSION_ID}`,
+    );
   });
 });

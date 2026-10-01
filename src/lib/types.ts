@@ -46,6 +46,11 @@ export interface SessionView extends ClassSession {
   qr_rotating: boolean;
 }
 
+/** A subject's session history entry (GET /subjects/:id/sessions). */
+export interface SessionSummary extends ClassSession {
+  attendance_count: number;
+}
+
 export interface Enrollment {
   id: string;
   subject_id: string;
@@ -105,11 +110,11 @@ export const ERROR_CODES = [
   "RATE_LIMITED",
   "INVALID_CREDENTIALS",
   "ACCOUNT_INACTIVE",
+  "PASSWORD_CHANGE_REQUIRED",
   "TOKEN_EXPIRED",
   "TOKEN_INVALID",
   "SESSION_NOT_LIVE",
   "NOT_ENROLLED",
-  "ALREADY_MARKED",
   "INTERNAL",
 ] as const;
 

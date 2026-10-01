@@ -32,7 +32,7 @@ Three roles: `admin`, `professor`, `student`. The frontend will need three diffe
 { "error": { "code": "SOME_CODE", "message": "human readable", "details": { } } }
 ```
 
-Always unwrap `.data` on success, and check for `.error` on failure. `details` is optional and may be a string, or (for validation errors) an object of `{ "field_name": "validation_tag" }`.
+Always unwrap `.data` on success, and check for `.error` on failure. `details` is optional and may be a string, or (for validation errors) an object of `{ "field_name": "validation_tag" }` where `field_name` is exactly the JSON key you sent (e.g. `"session_id": "uuid"`).
 
 **Auth header:** `Authorization: Bearer <access_token>` on every protected request. Login/register/refresh are exceptions.
 
@@ -45,8 +45,8 @@ Always unwrap `.data` on success, and check for `.error` on failure. `details` i
 | 201 | Created |
 | 204 | No Content (delete) |
 | 400 | Bad request / malformed JSON / bad UUID |
-| 401 | Unauthorized (missing/invalid/expired token, bad login) |
-| 403 | Forbidden (wrong role, not the resource owner, inactive account) |
+| 401 | Unauthorized (missing/invalid/expired token, deactivated or deleted account, bad login) |
+| 403 | Forbidden (wrong role, not the resource owner, inactive account at login, `PASSWORD_CHANGE_REQUIRED`) |
 | 404 | Not found |
 | 409 | Conflict (duplicate, already-live session, already enrolled, etc.) |
 | 410 | Gone (QR token expired) |
@@ -55,7 +55,11 @@ Always unwrap `.data` on success, and check for `.error` on failure. `details` i
 | 500 | Internal error |
 
 **Error codes** you should branch UI behavior on (`error.code`):
-`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `VALIDATION_ERROR`, `BAD_REQUEST`, `RATE_LIMITED`, `INVALID_CREDENTIALS`, `ACCOUNT_INACTIVE`, `TOKEN_EXPIRED`, `TOKEN_INVALID`, `SESSION_NOT_LIVE`, `NOT_ENROLLED`, `ALREADY_MARKED`, `INTERNAL`.
+`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `VALIDATION_ERROR`, `BAD_REQUEST`, `RATE_LIMITED`, `INVALID_CREDENTIALS`, `ACCOUNT_INACTIVE`, `PASSWORD_CHANGE_REQUIRED`, `TOKEN_EXPIRED`, `TOKEN_INVALID`, `SESSION_NOT_LIVE`, `NOT_ENROLLED`, `INTERNAL`.
+
+`ALREADY_MARKED` is **not** an error code: a repeated scan is a successful `200` with `data.status = "already_marked"` (§5.5).
+
+**Lists** are always JSON arrays: an empty result is `{ "data": [] }`, never `null` (also for nested lists such as a subject's `schedules` and `roster`).
 
 **Dates:** all timestamps are ISO-8601 / RFC3339 strings in UTC (e.g. `"2026-09-13T10:15:30Z"`).
 
@@ -68,7 +72,7 @@ Always unwrap `.data` on success, and check for `.error` on failure. `details` i
 - JWT **access token** (short-lived, default 30 min) — sent as `Authorization: Bearer`.
 - Opaque **refresh token** (default 168h / 7 days) — stored server-side (DB-backed, revocable), sent only to `/auth/refresh` and `/auth/logout`.
 - Login response includes both tokens plus the user's `role`. Route the user to the admin/professor/student UI based on `user.role`.
-- `must_change_password: true` on the user object means the admin created this account with a temp password — the frontend should force a "change your password" screen before letting the user proceed (call `POST /auth/change-password`).
+- `must_change_password: true` on the user object means the admin created this account with a temp password. Show a "change your password" screen and call `POST /auth/change-password`. **The server enforces this:** until the password is changed, every endpoint except `GET /auth/me` and `POST /auth/change-password` returns `403 PASSWORD_CHANGE_REQUIRED`. The same access token works right after the change (but refresh tokens are revoked, so log in again before it expires).
 - The professor board WebSocket cannot send headers, so it authenticates via `?access_token=<jwt>` query param instead of the header — see §6.2.
 
 ---
@@ -104,8 +108,8 @@ interface ClassSchedule {
   id: string;
   subject_id: string;
   day_of_week: number;     // 0=Sunday .. 6=Saturday
-  start_time: string;      // "HH:MM" or "HH:MM:SS"
-  end_time: string;
+  start_time: string;      // returned as "HH:MM:SS"; accepted on input as "HH:MM" or "HH:MM:SS" (e.g. "9:30")
+  end_time: string;        // same format; must be later than start_time (compared as times of day)
   room?: string;
   created_at: string;
 }
@@ -122,6 +126,10 @@ interface ClassSession {
 
 interface SessionView extends ClassSession {
   qr_rotating: boolean;    // true if the rotation goroutine is currently running
+}
+
+interface SessionSummary extends ClassSession {   // subject's session history entry
+  attendance_count: number;  // students marked present in this session
 }
 
 interface Enrollment {
@@ -187,8 +195,10 @@ Errors: `INVALID_CREDENTIALS` (401), `ACCOUNT_INACTIVE` (403).
 
 #### `POST /api/v1/auth/refresh` — public
 Request: `{ "refresh_token": "..." }`
-Response `200`: same shape as login (tokens are **rotated** — the old refresh token is invalidated, store the new one).
-Errors: `UNAUTHORIZED` (401, invalid/expired refresh token), `ACCOUNT_INACTIVE`.
+Response `200`: same shape as login. Tokens are **rotated**: the presented refresh token is invalidated, store the new one.
+Errors: `UNAUTHORIZED` (401, invalid/expired/already-used refresh token), `ACCOUNT_INACTIVE` (403).
+
+**Reuse detection:** presenting a refresh token that was already rotated is treated as theft, and every token of that login is revoked (the user must log in again; other devices are unaffected). Consequently the frontend must refresh **single-flight**: if several requests get a 401 at the same time, make one `/auth/refresh` call and let the others wait for its result instead of each refreshing with the same token.
 
 #### `POST /api/v1/auth/logout` — public (just needs the refresh token)
 Request: `{ "refresh_token": "..." }`
@@ -234,7 +244,7 @@ Request (all fields optional, send only what changes):
 { "full_name": "New Name", "student_code": "S999", "is_active": false }
 ```
 Response `200`: `{ "data": { "...": "updated User" } }`
-Note: setting `is_active: false` immediately revokes that user's sessions (their refresh tokens).
+Note: setting `is_active: false` takes effect immediately: the user's refresh tokens are revoked **and** their current access token stops working (`401 UNAUTHORIZED` on the next request, REST and WebSocket handshake).
 Errors: `NOT_FOUND`, `CONFLICT` (student_code taken).
 
 #### `DELETE /api/v1/admin/users/{id}`
@@ -290,6 +300,12 @@ Response `201`: `{ "data": { "...": "ClassSchedule" } }`
 #### `GET /api/v1/subjects/{id}/schedules`
 Response `200`: `{ "data": [ ClassSchedule, ... ] }`
 
+#### `GET /api/v1/subjects/{id}/sessions`
+Response `200`: `{ "data": [ SessionSummary, ... ] }` — every session of the subject (live and ended), newest first, each with its `attendance_count`. Use it for a session-history list; open a session's attendance with `GET /api/v1/sessions/{session_id}/attendance`.
+Errors: `FORBIDDEN` (not the owner), `NOT_FOUND`.
+
+The attendance endpoints return only students who were **present**. To show who was absent, compare `student_id` against the roster from `GET /api/v1/subjects/{id}/enrollments`.
+
 #### `POST /api/v1/subjects/{id}/enrollments`
 Request — provide **either** `student_id` or `student_code`:
 ```json
@@ -317,6 +333,7 @@ Request body is **optional** (can be omitted entirely, or empty `{}`):
 ```
 Response `201`: `{ "data": { "...": "ClassSession", "status": "live", "started_at": "..." } }`
 Errors: `FORBIDDEN` (not owner), `CONFLICT` (a session for this subject is already live — only one live session per subject allowed), `VALIDATION_ERROR` (schedule_id doesn't belong to this subject).
+On that `CONFLICT`, `details` is `{ "message": "...", "live_session_id": "uuid" }` — use it to offer "Resume" (open the board for that session) or "Stop" (`POST /api/v1/sessions/{live_session_id}/stop`) instead of a dead-end error. This is the only way to rediscover a live session after the board tab is closed.
 This kicks off server-side QR rotation immediately (a token is minted right away, then every `QR_ROTATION_INTERVAL_MS`, default 1000ms).
 
 #### `POST /api/v1/sessions/{session_id}/stop`
@@ -381,7 +398,7 @@ This is the trickiest part of the frontend — it's a dedicated "board" view the
 ```
 GET ws://localhost:8080/ws/sessions/{session_id}/qr?access_token=<JWT_ACCESS_TOKEN>
 ```
-- Professor role only, and only the session's owning professor — connecting to someone else's session, or to a non-live session, closes the connection immediately.
+- Professor role only, and only the session's owning professor, with an active account and no pending temporary password. Rejected connections fail the **handshake** with an HTTP error (401 bad/missing token or deactivated account, 403 wrong role / not the owner / `PASSWORD_CHANGE_REQUIRED`, 404 unknown session, 409 `SESSION_NOT_LIVE`) instead of opening and then closing. Browsers do not expose that status to `WebSocket`: you get an `error` event followed by `close` with code `1006`. Treat it as "cannot open the board" and, if needed, call `GET /api/v1/sessions/{session_id}` to find out why.
 - **Auth via query param, not header** — browsers can't set custom headers during the WS handshake, so pass the JWT as `?access_token=...` on the URL itself.
 - On connect, the server immediately sends the current token, then a new one every rotation interval (~1s), as JSON text frames:
   ```json
@@ -401,7 +418,7 @@ The student side doesn't need a WebSocket — it's a single fire-and-forget `POS
 
 ## 7. Suggested frontend structure
 
-- **Auth**: login page, forced change-password page (when `must_change_password`), token refresh interceptor (on 401, try `/auth/refresh` once, then redirect to login on failure), logout.
+- **Auth**: login page, forced change-password page (when `must_change_password`), token refresh interceptor (on 401, call `/auth/refresh` once, **single-flight**: concurrent 401s must wait for the same refresh call, see §5.1; redirect to login on failure), redirect to the change-password page on `403 PASSWORD_CHANGE_REQUIRED`, logout.
 - **Admin dashboard**: user list/filter/create (via register)/deactivate/delete, system-wide subject list, attendance export (JSON table + a "Download CSV" button hitting `?format=csv`).
 - **Professor dashboard**:
   - Subjects: list/create/edit/delete, detail page (roster + schedules), add schedule, enroll student (by ID or code).

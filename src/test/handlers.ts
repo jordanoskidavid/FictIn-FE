@@ -85,9 +85,9 @@ export function ok<T>(data: T, init?: ResponseInit) {
   return HttpResponse.json({ data }, init);
 }
 
-/** Error envelope used by the backend: `{ error: { code, message } }`. */
-export function apiError(status: number, code: string, message = code) {
-  return HttpResponse.json({ error: { code, message } }, { status });
+/** Error envelope used by the backend: `{ error: { code, message, details? } }`. */
+export function apiError(status: number, code: string, message = code, details?: unknown) {
+  return HttpResponse.json({ error: { code, message, details } }, { status });
 }
 
 /** Resolves the caller from `Authorization: Bearer access-<userId>`. */
@@ -97,7 +97,38 @@ function currentUser(request: Request): User | undefined {
   return db.users.find((u) => u.id === id);
 }
 
+const PUBLIC_PATHS = ["/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout"];
+const PASSWORD_CHANGE_ALLOWED = ["/api/v1/auth/me", "/api/v1/auth/change-password"];
+
+/** Parses "H:MM", "HH:MM" or "HH:MM:SS" into seconds since midnight, like the backend. */
+function parseTimeOfDay(value: string | undefined): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value ?? "");
+  if (!m) return undefined;
+  const [h, min, s] = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
+  if (h > 23 || min > 59 || s > 59) return undefined;
+  return h * 3600 + min * 60 + s;
+}
+
+function formatTimeOfDay(seconds: number): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
+}
+
 export const handlers = [
+  // Mirrors the backend auth middleware for a signed-in caller: a deactivated account's access
+  // token stops working (401), and a pending temporary password blocks everything except
+  // /auth/me and /auth/change-password (403). Returning nothing falls through to the route.
+  http.all("/api/v1/*", ({ request }) => {
+    const path = new URL(request.url).pathname;
+    if (PUBLIC_PATHS.includes(path)) return;
+    const user = currentUser(request);
+    if (!user) return;
+    if (!user.is_active) return apiError(401, "UNAUTHORIZED");
+    if (user.must_change_password && !PASSWORD_CHANGE_ALLOWED.includes(path)) {
+      return apiError(403, "PASSWORD_CHANGE_REQUIRED", "password change required");
+    }
+  }),
+
   // ---- auth ----
   http.post("/api/v1/auth/login", async ({ request }) => {
     const { email, password } = (await request.json()) as { email: string; password: string };
@@ -117,7 +148,9 @@ export const handlers = [
   http.post("/api/v1/auth/refresh", async ({ request }) => {
     const { refresh_token } = (await request.json()) as { refresh_token: string };
     const user = db.users.find((u) => `refresh-${u.id}` === refresh_token);
-    return user ? ok(buildLoginResponse(user)) : apiError(401, "UNAUTHORIZED");
+    if (!user) return apiError(401, "UNAUTHORIZED");
+    if (!user.is_active) return apiError(403, "ACCOUNT_INACTIVE");
+    return ok(buildLoginResponse(user));
   }),
 
   http.post("/api/v1/auth/logout", () => new HttpResponse(null, { status: 204 })),
@@ -225,15 +258,22 @@ export const handlers = [
   http.post("/api/v1/subjects/:id/schedules", async ({ params, request }) => {
     const body = (await request.json()) as Partial<ClassSchedule>;
     const day = body.day_of_week ?? -1;
-    const time = /^\d{2}:\d{2}(:\d{2})?$/;
+    const start = parseTimeOfDay(body.start_time);
+    const end = parseTimeOfDay(body.end_time);
     if (day < 0 || day > 6) return apiError(422, "VALIDATION_ERROR", "day_of_week must be 0..6");
-    if (!time.test(body.start_time ?? "") || !time.test(body.end_time ?? "")) {
+    if (start === undefined || end === undefined) {
       return apiError(422, "VALIDATION_ERROR", "start_time and end_time must be HH:MM or HH:MM:SS");
     }
-    if (body.end_time! <= body.start_time!) {
+    if (end <= start) {
       return apiError(422, "VALIDATION_ERROR", "end_time must be after start_time");
     }
-    const schedule = buildSchedule({ ...body, room: body.room, subject_id: String(params.id) });
+    const schedule = buildSchedule({
+      ...body,
+      start_time: formatTimeOfDay(start),
+      end_time: formatTimeOfDay(end),
+      room: body.room,
+      subject_id: String(params.id),
+    });
     db.schedules.push(schedule);
     return ok(schedule, { status: 201 });
   }),
@@ -269,6 +309,19 @@ export const handlers = [
     );
   }),
 
+  // Mirrors SessionRepo.ListBySubject: newest first, each with its attendance count.
+  http.get("/api/v1/subjects/:id/sessions", ({ params }) => {
+    if (!db.subjects.some((s) => s.id === params.id)) return apiError(404, "NOT_FOUND", "resource not found");
+    const sessions = db.sessions
+      .filter((s) => s.subject_id === params.id)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((s) => ({
+        ...toClassSession(s),
+        attendance_count: db.attendance.filter((r) => r.session_id === s.id).length,
+      }));
+    return ok(sessions);
+  }),
+
   http.get("/api/v1/subjects/:id/enrollments", ({ params }) =>
     ok(db.enrollments.filter((e) => e.subject_id === params.id).map(toRoster)),
   ),
@@ -286,8 +339,10 @@ export const handlers = [
         return apiError(422, "VALIDATION_ERROR", "schedule_id does not belong to this subject");
       }
     }
-    if (db.sessions.some((s) => s.subject_id === params.subjectId && s.status === "live")) {
-      return apiError(409, "CONFLICT", "a live session already exists for this subject");
+    const live = db.sessions.find((s) => s.subject_id === params.subjectId && s.status === "live");
+    if (live) {
+      const message = "a live session already exists for this subject";
+      return apiError(409, "CONFLICT", message, { message, live_session_id: live.id });
     }
     const session = buildSession({ subject_id: String(params.subjectId), schedule_id: body.schedule_id });
     db.sessions.push(session);
