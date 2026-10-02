@@ -453,18 +453,23 @@ function RosterCard({
         </Table>
       )}
 
-      <form onSubmit={handleSubmit} className="mt-4 flex flex-wrap items-end gap-3">
-        <Input
-          label="Enroll student"
-          value={identifier}
-          onChange={(e) => setIdentifier(e.target.value)}
-          hint="Student ID or student code"
-          className="w-64"
-          required
-        />
-        <Button type="submit" loading={loading} variant="secondary">
-          Enroll
-        </Button>
+      <form onSubmit={handleSubmit} className="mt-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Input
+            label="Enroll student"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
+            aria-describedby="enroll-student-hint"
+            className="w-64"
+            required
+          />
+          <Button type="submit" loading={loading} variant="secondary">
+            Enroll
+          </Button>
+        </div>
+        <p id="enroll-student-hint" className="mt-1 text-xs text-slate-500">
+          Student ID or student code
+        </p>
       </form>
     </Card>
   );
